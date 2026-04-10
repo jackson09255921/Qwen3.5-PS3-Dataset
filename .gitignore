@@ -1,0 +1,23 @@
+# Datasets
+CodeAlpaca/ 
+DataOptim/
+Idatabricks/
+llava_instruct/
+math_qa/
+tulu_personas/
+megachat_gpt4o/
+SVIT/
+math500/
+CC3M/
+ChartQA/
+ScreenSpot-v2/
+ShareGPT4V/
+eval/
+
+# Python cache 
+__pycache__/
+*.pyc 
+*.pyo 
+*.pyd 
+
+

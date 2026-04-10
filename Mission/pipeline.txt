@@ -1,0 +1,46 @@
+【Stage 1: 視覺定位基礎】 resize qa_grounding
+數據集： 
+  dataoptim_ref3rec， (GRIT)
+  關鍵點： 必須包含精確的像素級 GT bbox。使用 resize 確保影像與標籤 100%對齊。
+
+
+【Stage 2: 空間與文字對齊】pad torch 數據集： 
+SynthDoG‑en, llava_instruct_multi
+關鍵點： 影像置於 1512 畫布中心。這是訓練模型習慣「中間有圖、四周全黑」並建立空間坐標系的關鍵。
+處理mRoPE/極座標
+
+
+【Stage 3: 自動變焦與總結】pad torch + RL
+數據集： 
+SynthDoG
+關鍵點： 訓練模型在面對細小文字時主動調高 $Scale$，面對全局佈局時使用低 $Scale$。
+
+
+{
+  "id": "semicon_001",
+  "image": "wafer_inspection.jpg",
+  "box": [120, 85, 300, 450], 
+  "conversations": [
+    {
+      "from": "human",
+      "value": "<image>\nWhat is inside the designated area?"
+    },
+    {
+      "from": "gpt",
+      "value": "There is a critical defect on the edge of the die."
+    }
+  ]
+}
+
+
+{
+  "id": "000000001",
+  "image": "COCO_train2014_000000001.jpg",
+  "conversations": [
+    {"from": "human", "value": "<image>\nWhat is the person doing?"},
+    {"from": "gpt", "value": "The person is riding a bicycle."}
+  ]
+}
+
+Benchmark (High resolution)
+V* bench, MME-realworld
