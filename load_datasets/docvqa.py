@@ -22,7 +22,7 @@ def process_all_splits():
         print("=" * 50)
 
         try:
-            ds = load_dataset("lmms-lab/DocVQA", "DocVQA", split=split)
+            ds = load_dataset("HuggingFaceM4/DocumentVQA", split=split)
         except Exception as e:
             print(f"❌ 載入 {split} 失敗：{e}")
             continue
