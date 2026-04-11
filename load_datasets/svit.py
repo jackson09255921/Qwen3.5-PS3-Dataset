@@ -199,7 +199,7 @@ def process_subset(subset_name):
                 continue
 
             # 相對路徑（從 SVIT base 往下，訓練時 image_folder=~/datasets/SVIT）
-            rel_img = f"images/{int(image_id)}.jpg"
+            rel_img = f"{int(image_id)}.jpg"
 
             # 攤平對話並清理 <st>...<ed> 標記
             turns = flatten_conversations(raw_convs)
