@@ -13,7 +13,6 @@ BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 REPO_ID = "BAAI/SVIT"
 
-# 4 種子集 (referring_qa 含座標，其餘為純對話)
 DATA_SUBSETS = [
     "data/complex_reasoning.zip",
     "data/conversation.zip",
@@ -56,27 +55,66 @@ def setup():
                 zf.extract(member, out_dir)
         print(f"  ✅ {name} 解壓完成")
 
-# ---------- 3. 找圖片路徑 ----------
+    merge_vg_images()
+
+# ---------- 3. 合併圖片到 images/ ----------
+# 解壓後結構：images/images/VG_100K/ + images/images2/VG_100K_2/
+# 全部搬到 images/ 直接放，結果為 images/1.jpg、images/2.jpg ...
+VG_SOURCE_DIRS = [
+    IMAGES_DIR / "images" / "VG_100K",
+    IMAGES_DIR / "images2" / "VG_100K_2",
+    IMAGES_DIR / "images" / "VG_100K_2",
+    IMAGES_DIR / "images2" / "VG_100K",
+]
+
+def merge_vg_images():
+    """將 VG_100K / VG_100K_2 直接移到 images/ 底下"""
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing = sum(1 for _ in IMAGES_DIR.glob("*.jpg"))
+    if existing > 0:
+        print(f"  ✅ images/ 已有 {existing} 張圖，跳過合併")
+        return
+
+    total = 0
+    for src_dir in VG_SOURCE_DIRS:
+        if not src_dir.exists():
+            continue
+        files = list(src_dir.glob("*.jpg"))
+        print(f"  📂 合併 {src_dir.name}: {len(files)} 張...")
+        for src in tqdm(files, desc=f"  mv {src_dir.name}", leave=False):
+            dst = IMAGES_DIR / src.name
+            if not dst.exists():
+                src.rename(dst)
+            total += 1
+    print(f"  ✅ 合併完成，共 {total} 張 → {IMAGES_DIR}")
+
 def find_image(image_id):
-    """在 images/ 和 images2/ 中尋找對應 image_id 的圖片"""
-    fname = f"{int(image_id):012d}.jpg"
-    for sub in ["images", "images2"]:
-        p = IMAGES_DIR / sub / fname
+    fname = f"{int(image_id)}.jpg"
+    p = IMAGES_DIR / fname
+    if p.exists():
+        return p
+    # 合併前的 fallback
+    for d in VG_SOURCE_DIRS:
+        p = d / fname
         if p.exists():
-            return p
-    # fallback: 非零填充
-    for sub in ["images", "images2"]:
-        for p in (IMAGES_DIR / sub).glob(f"*{int(image_id)}*.jpg"):
             return p
     return None
 
-# ---------- 4. 座標轉換（referring_qa 使用）----------
+# ---------- 4. 文字清理 ----------
+# SVIT 標記格式：<st>entity_name<ed> [x1, y1, x2, y2]
+# 訓練時不使用這些特殊 token，移除標記只保留 entity 名稱與去掉座標
+ST_TAG_PATTERN = re.compile(r"<st>(.*?)<ed>\s*\[[0-9\.,\s]+\]")
 BBOX_PATTERN = re.compile(r"\[([0-9\.]+),\s*([0-9\.]+),\s*([0-9\.]+),\s*([0-9\.]+)\]")
 
-def extract_bbox_pixel(text, img_path):
+def clean_text(text):
+    """移除 <st>...<ed> 標記和嵌入座標，只保留 entity 名稱"""
+    return ST_TAG_PATTERN.sub(r"\1", text).strip()
+
+# ---------- 5. 座標轉換（referring_qa 使用）----------
+def extract_first_bbox_pixel(text, img_path):
     """
-    從對話文字中提取座標，並轉換為 absolute pixel XYXY。
-    支援 [0,1] 和 [0,1000] 兩種 normalized 格式。
+    從文字中提取第一個 bbox，normalized [0,1] → absolute pixel XYXY
     """
     match = BBOX_PATTERN.search(text)
     if not match:
@@ -85,21 +123,50 @@ def extract_bbox_pixel(text, img_path):
         vals = [float(x) for x in match.groups()]
         with Image.open(img_path) as img:
             W, H = img.size
-        # 判斷是否為 [0,1000] 格式
-        factor = 1000.0 if any(v > 1.1 for v in vals) else 1.0
-        x1 = round(vals[0] / factor * W, 2)
-        y1 = round(vals[1] / factor * H, 2)
-        x2 = round(vals[2] / factor * W, 2)
-        y2 = round(vals[3] / factor * H, 2)
+        x1 = round(vals[0] * W, 2)
+        y1 = round(vals[1] * H, 2)
+        x2 = round(vals[2] * W, 2)
+        y2 = round(vals[3] * H, 2)
         return [x1, y1, x2, y2]
     except Exception:
         return None
 
-# ---------- 5. 處理各子集 ----------
+# ---------- 6. 對話結構攤平 ----------
+def flatten_conversations(raw_conversations, add_image_tag=True):
+    """
+    SVIT 結構：conversations = [{content: [{from,value},{from,value}]}, ...]
+    攤平為：[{from, value}, {from, value}, ...]
+    第一個 human 發言加入 <image> 標籤
+    """
+    turns = []
+    for exchange in raw_conversations:
+        content = exchange.get("content", [])
+        for msg in content:
+            role = msg.get("from", "")
+            value = msg.get("value", "").strip()
+            if role == "user":
+                role = "human"
+            elif role != "gpt":
+                continue
+            turns.append({"from": role, "value": value})
+
+    if not turns:
+        return None
+
+    # 確保從 human 開始
+    if turns[0]["from"] != "human":
+        return None
+
+    # 第一個 human 發言加 <image> 標籤
+    if add_image_tag and "<image>" not in turns[0]["value"]:
+        turns[0]["value"] = "<image>\n" + turns[0]["value"]
+
+    return turns
+
+# ---------- 7. 處理各子集 ----------
 def process_subset(subset_name):
     json_path = BASE_DIR / subset_name / f"{subset_name}.json"
     if not json_path.exists():
-        # 嘗試遞迴搜尋
         found = list((BASE_DIR / subset_name).rglob("*.json"))
         if not found:
             print(f"❌ 找不到 {subset_name} 的 JSON 檔案，跳過")
@@ -113,58 +180,65 @@ def process_subset(subset_name):
         data = json.load(f)
 
     valid_count = 0
-    skip_count = 0
+    skip_no_image = 0
+    skip_no_conv = 0
+    skip_no_bbox = 0
 
     with open(output_file, "w", encoding="utf-8") as f_out:
         for item in tqdm(data, desc=f"處理 {subset_name}"):
             image_id = item.get("image_id")
-            convs = item.get("conversations", [])
+            raw_convs = item.get("conversations", [])
 
-            if not image_id or not convs:
-                skip_count += 1
+            if not image_id or not raw_convs:
+                skip_no_conv += 1
                 continue
 
             img_path = find_image(image_id)
             if not img_path:
-                skip_count += 1
+                skip_no_image += 1
                 continue
 
-            # 相對圖片路徑（從 SVIT base 往下）
-            try:
-                rel_img = img_path.relative_to(BASE_DIR)
-            except ValueError:
-                rel_img = img_path
+            # 相對路徑（從 SVIT base 往下，訓練時 image_folder=~/datasets/SVIT）
+            rel_img = f"images/{int(image_id)}.jpg"
 
-            # 確保 human 發言有 <image> 標籤
-            if convs[0]["from"] == "human" and "<image>" not in convs[0]["value"]:
-                convs[0]["value"] = "<image>\n" + convs[0]["value"]
+            # 攤平對話並清理 <st>...<ed> 標記
+            turns = flatten_conversations(raw_convs)
+            if not turns:
+                skip_no_conv += 1
+                continue
+
+            for t in turns:
+                t["value"] = clean_text(t["value"])
 
             formatted = {
                 "id": f"svit_{subset_name}_{valid_count}",
-                "image": str(rel_img),
-                "conversations": convs,
+                "image": rel_img,
+                "conversations": turns,
             }
 
-            # referring_qa：提取 bbox 轉為 absolute pixel XYXY
+            # referring_qa：從第一個 human 原始文字提取 bbox → absolute pixel XYXY
             if is_referring:
-                full_text = " ".join(c["value"] for c in convs)
-                bbox = extract_bbox_pixel(full_text, img_path)
-                if bbox:
-                    formatted["box"] = bbox
-                    # 將 GPT 回答統一改為 absolute pixel 格式
-                    formatted["conversations"][-1]["value"] = (
-                        f"[{bbox[0]}, {bbox[1]}, {bbox[2]}, {bbox[3]}]"
-                    )
-                else:
-                    skip_count += 1
+                # 在清理前取得原始第一個 human 發言做座標提取
+                first_human_raw = raw_convs[0]["content"][0]["value"] if raw_convs[0].get("content") else ""
+                bbox = extract_first_bbox_pixel(first_human_raw, img_path)
+                if not bbox:
+                    skip_no_bbox += 1
                     continue
+                formatted["box"] = bbox
 
             f_out.write(json.dumps(formatted, ensure_ascii=False) + "\n")
             valid_count += 1
 
-    print(f"  ✅ {subset_name}: {valid_count} 筆，跳過 {skip_count} 筆 → {output_file.name}")
+    msg = f"  ✅ {subset_name}: {valid_count} 筆"
+    if skip_no_image:
+        msg += f"，找不到圖片: {skip_no_image}"
+    if skip_no_conv:
+        msg += f"，格式異常: {skip_no_conv}"
+    if is_referring and skip_no_bbox:
+        msg += f"，無 bbox: {skip_no_bbox}"
+    print(msg + f" → {output_file.name}")
 
-# ---------- 6. 主程序 ----------
+# ---------- 8. 主程序 ----------
 def main():
     print("🚀 啟動 SVIT 資料集處理程序...")
     setup()
