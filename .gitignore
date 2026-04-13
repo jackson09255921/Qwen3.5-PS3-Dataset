@@ -13,6 +13,8 @@ ChartQA/
 ScreenSpot-v2/
 ShareGPT4V/
 eval/
+DocVQA/
+Tulu/
 
 # Python cache 
 __pycache__/
