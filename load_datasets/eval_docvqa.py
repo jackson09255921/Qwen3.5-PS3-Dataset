@@ -3,61 +3,42 @@ from pathlib import Path
 from tqdm import tqdm
 from datasets import load_dataset
 
-# ---------- 路徑（對齊 default.yaml）----------
-BASE_DIR = Path("/home/fireblue/datasets/eval/docvqa")
-IMAGES_DIR = BASE_DIR / "images" / "documents"   # eval script: os.path.join(image_dir, "documents/xxx.png")
-OUTPUT_FILE = BASE_DIR / "docvqa.jsonl"           # yaml: docvqa.jsonl，格式 {"data": [...]}
+# 對齊 default.yaml: docvqa.data_path / image_dir
+BASE_DIR   = Path("/home/fireblue/datasets/eval/docvqa")
+IMAGES_DIR = BASE_DIR / "images"
+OUTPUT     = BASE_DIR / "docvqa.jsonl"   # eval script: raw["data"]
 
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-# ---------- 主程序 ----------
 def main():
-    print("🚀 下載 DocVQA validation split...")
-    ds = load_dataset("HuggingFaceM4/DocumentVQA", split="validation")
+    print("🚀 下載 DocVQA val split (vikhyatk/docvqa-val)...")
+    # vikhyatk/docvqa-val 有完整 answers，lmms-lab/DocVQA val/test 的 answers 為 None
+    ds = load_dataset("vikhyatk/docvqa-val", split="validation")
 
     records = []
-    for item in tqdm(ds, desc="處理"):
-        pil_img = item.get("image")
-        question_id = item.get("questionId")
-        question = str(item.get("question", "")).strip()
-        answers = item.get("answers", [])
-        ucsf_id = str(item.get("ucsf_document_id", "")).strip()
-        page_no = str(item.get("ucsf_document_page_no", "1")).strip()
+    qid = 0
+    for idx, sample in enumerate(tqdm(ds)):
+        img_name = f"{idx}.png"
+        img_path = IMAGES_DIR / img_name
+        if not img_path.exists():
+            sample["image"].convert("RGB").save(img_path, format="PNG")
 
-        if not pil_img or not question_id or not question:
-            continue
+        # 一張圖有多個 QA pair，各自建一筆記錄
+        for qa in sample["qa"]:
+            records.append({
+                "questionId": qid,
+                "question":   qa["question"],
+                "answers":    qa["answers"],
+                "image":      img_name,    # eval script: os.path.join(image_dir, img_name)
+            })
+            qid += 1
 
-        if isinstance(answers, str):
-            answers = [answers]
+    # eval script: raw = io.load(data_path) → raw["data"]
+    with open(OUTPUT, "w", encoding="utf-8") as f:
+        json.dump({"data": records}, f, ensure_ascii=False, indent=2)
 
-        # 圖片命名：{ucsf_document_id}_{page_no}.png（官方 DocVQA 命名慣例）
-        img_name = f"{ucsf_id}_{page_no}.png"
-        save_path = IMAGES_DIR / img_name
-
-        if not save_path.exists():
-            try:
-                pil_img.convert("RGB").save(save_path)
-            except Exception:
-                continue
-
-        # eval script: inst["image"] = "documents/xxx.png"
-        #              img_path = os.path.join(image_dir, inst["image"])
-        #              → image_dir/documents/xxx.png  ✓
-        records.append({
-            "questionId": question_id,
-            "question": question,
-            "answers": answers,
-            "image": f"documents/{img_name}",
-        })
-
-    # DocVQA eval script: raw = io.load(data_path) → raw["data"]
-    output = {"data": records}
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-
-    print(f"✅ 完成：{len(records)} 筆 → {OUTPUT_FILE}")
-    print(f"   圖片：{IMAGES_DIR}")
+    print(f"✅ {len(records)} 筆（{idx+1} 張圖）→ {OUTPUT}")
 
 if __name__ == "__main__":
     main()

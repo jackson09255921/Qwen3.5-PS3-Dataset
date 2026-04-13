@@ -3,7 +3,7 @@ from pathlib import Path
 from tqdm import tqdm
 from datasets import load_dataset
 
-# ---------- 路徑（對齊 default.yaml）----------
+# 對齊 default.yaml: mathvista.testmini_data_path / test_data_path
 BASE_DIR   = Path("/home/fireblue/datasets/eval/mathvista")
 IMAGES_DIR = BASE_DIR / "images"
 BASE_DIR.mkdir(parents=True, exist_ok=True)
@@ -14,9 +14,8 @@ SPLITS = {
     "test":     BASE_DIR / "mathvista_test.jsonl",
 }
 
-# ---------- 主程序 ----------
 def main():
-    print("🚀 下載 MathVista dataset...")
+    print("🚀 下載 MathVista (AI4Math/MathVista)...")
     ds_all = load_dataset("AI4Math/MathVista")
 
     for split, output_file in SPLITS.items():
@@ -25,32 +24,28 @@ def main():
             continue
 
         ds = ds_all[split]
-        print(f"\n🎯 處理 split: {split} ({len(ds)} 筆)")
+        print(f"\n🎯 {split} ({len(ds)} 筆)")
 
-        with open(output_file, "w", encoding="utf-8") as f_out:
-            for item in tqdm(ds, desc=split):
-                pid = item["pid"]
-                pil_img = item.get("decoded_image")
+        with open(output_file, "w", encoding="utf-8") as f:
+            for ex in tqdm(ds, desc=split):
+                # 保留原始相對路徑結構 images/N.jpg，存到 BASE_DIR/images/N.jpg
+                rel_path = ex["image"]                  # e.g. "images/1.jpg"
+                abs_path = BASE_DIR / rel_path
+                abs_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # 儲存圖片
-                img_name = f"{pid}.jpg"
-                save_path = IMAGES_DIR / img_name
-                if not save_path.exists() and pil_img is not None:
-                    try:
-                        pil_img.convert("RGB").save(save_path)
-                    except Exception:
-                        pass
+                if not abs_path.exists() and ex.get("decoded_image") is not None:
+                    ex["decoded_image"].convert("RGB").save(abs_path)
 
-                # 序列化所有文字欄位，image 改為本地路徑
-                record = {k: v for k, v in item.items() if k != "decoded_image"}
-                record["image"] = str(save_path)  # eval script fallback: Image.open(img_path)
+                # eval script: problem["image"] → Image.open(img_path)
+                rec = {k: v for k, v in ex.items() if k != "decoded_image"}
+                rec["image"] = str(abs_path)  # 絕對路徑，Image.open 可直接讀
 
-                f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
         count = sum(1 for _ in open(output_file))
-        print(f"  ✅ {split}: {count} 筆 → {output_file.name}")
+        print(f"  ✅ {count} 筆 → {output_file.name}")
 
-    print(f"\n🎉 完成！圖片：{IMAGES_DIR}")
+    print(f"\n🎉 完成！")
 
 if __name__ == "__main__":
     main()
