@@ -10,13 +10,20 @@ OUTPUT     = BASE_DIR / "test.jsonl"
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-# adversarial split is hardest and most discriminative
-POPE_CONFIG = "adversarial"
-
 def main():
-    print(f"🚀 下載 POPE {POPE_CONFIG} (lmms-lab/POPE)...")
-    ds = load_dataset("lmms-lab/POPE", POPE_CONFIG, split="test")
-    print(f"  → {len(ds)} 筆，欄位: {ds.column_names}")
+    print("🚀 下載 POPE Full (lmms-lab/POPE)...")
+    raw = load_dataset("lmms-lab/POPE", "Full")
+    split_name = list(raw.keys())[0]
+    ds = raw[split_name]
+    print(f"  → {len(ds)} 筆，split: {split_name}，欄位: {ds.column_names}")
+
+    # 如果有 category 欄位，只取 adversarial（最具鑑別力）
+    category_field = next((f for f in ["category", "type", "pope_type"] if f in ds.column_names), None)
+    if category_field:
+        ds = ds.filter(lambda x: x[category_field] == "adversarial")
+        print(f"  → 篩選 adversarial 後: {len(ds)} 筆")
+    else:
+        print("  → 無 category 欄位，使用全部資料")
 
     with open(OUTPUT, "w", encoding="utf-8") as f:
         for i, ex in enumerate(tqdm(ds)):
